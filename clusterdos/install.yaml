@@ -1,0 +1,73 @@
+---
+# clusterdOS install manifest for the aranya-takehome cluster.
+#
+# Vendored from https://gitlab.com/aranya-tech/public/clusterdos.git @ v0.3.21,
+# customized with:
+#   - clusterdos.clustername  = "aranya-takehome"
+#   - gitapps.certmanager     enabled (required)
+#   - gitapps.metricsserver   enabled (required)
+#   - gitapps.nfd             enabled (required)
+#   - gitapps.ksm             enabled (optional extra — kube-state-metrics pairs with metrics-server
+#                                       to give cluster-state visibility)
+#
+# Note: gitapps.cilium is deliberately LEFT DISABLED because Cilium was installed
+# by kubespray at cluster-bootstrap time; enabling it here would conflict.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: clusterdos
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    name: in-cluster
+    namespace: argocd
+  project: default
+  syncPolicy:
+    automated:
+      prune: true
+      allowEmpty: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+      - CreateNamespace=true
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+  source:
+    repoURL: 'https://gitlab.com/aranya-tech/public/clusterdOS.git'
+    path: metadeployment/
+    targetRevision: v0.3.21
+    helm:
+      valuesObject:
+        clusterdos:
+          clustername: aranya-takehome
+          ref: v0.3.21
+        gitapps:
+          certmanager:
+            enabled: true
+          crossplane:
+            enabled: false
+          ksm:
+            enabled: true       # optional extra (kube-state-metrics)
+          lgtm:
+            enabled: false
+          metricsserver:
+            enabled: true
+          nfd:
+            enabled: true
+          nvidiagpuoperator:
+            enabled: false
+          rook:
+            enabled: false
+          wekafs:
+            enabled: false
+          tailscale:
+            enabled: false
+          traefik:
+            enabled: false
+          inference:
+            enabled: false
+          slurm:
+            enabled: false
