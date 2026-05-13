@@ -9,6 +9,13 @@ kubeconfig
 kubeconfig.yaml
 admin.conf
 *.kubeconfig
+# Bare `key` at the repo root — the candidate-issued SSH private key gets dropped
+# here while working. *.key wouldn't catch a file with no extension.
+/key
+/key.*
+
+# Internal verification / scratch — not part of the deliverable.
+VERIFY.md
 
 # Encrypted credentials bundle — delivered as email attachment, not via the repo.
 # Even though it's encrypted, no reason to publish it.

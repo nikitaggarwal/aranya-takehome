@@ -3,7 +3,7 @@
 This runbook walks you through reproducing the cluster from scratch on a fresh Mac with no Kubernetes tooling installed and 3 bare Ubuntu droplets in a DigitalOcean VPC. By the end you'll have:
 
 - A 3-node Kubernetes 1.32 cluster (each node is control-plane + worker + etcd) installed by **kubespray**, with **Cilium** as the CNI.
-- HA for in-cluster control-plane traffic via kubespray's localhost loadbalancer (one nginx per node fanning to all 3 apiservers).
+- HA control plane: 3 stacked-etcd apiservers, each kubelet talks to its own local apiserver on `127.0.0.1:6443`. Any single node can fail without taking the cluster down (etcd retains quorum with 2 of 3). `loadbalancer_apiserver_localhost: true` is set in the inventory but is an effective no-op while every node is both control-plane and worker — kubespray only installs the fronting nginx-proxy on worker-only nodes.
 - **ArgoCD** running inside the cluster, watching the clusterdOS git repo.
 - **clusterdOS v0.3.21** with these gitapps enabled: cert-manager, metrics-server, node-feature-discovery, kube-state-metrics.
 - An nginx `hello aranya` page reachable at `http://<any-node-public-ip>:30080`.
@@ -189,7 +189,9 @@ node3 ansible_host=NODE3_PUBLIC  ip=NODE3_PRIVATE  access_ip=NODE3_PRIVATE  etcd
 - `ansible_host` is the address Ansible SSHes to from your Mac — public, because the Mac is off-VPC.
 - `ip` and `access_ip` are the addresses K8s components on the nodes use to find each other — private, per the Aranya inter-node-on-private preference.
 
-If the public IPs differ from the originals, also update the cert SAN list in `inventory/group_vars/k8s_cluster/k8s-cluster.yml`:
+The `[all:vars]` block at the top of `inventory.ini` references `ansible_ssh_private_key_file=~/.ssh/aranya_candidate_key` — that matches the path you saved the key to in section 2. If you saved it somewhere else, update that line.
+
+If the public IPs differ from the originals, also update the cert SAN list in `inventory/group_vars/k8s_cluster/k8s-cluster.yml` (search the file for `supplementary_addresses_in_ssl_keys`):
 
 ```yaml
 supplementary_addresses_in_ssl_keys: [NODE1_PUBLIC, NODE2_PUBLIC, NODE3_PUBLIC]
@@ -242,6 +244,84 @@ kubectl -n kube-system get pods
 ```
 
 All three nodes should be `Ready`. Every pod in `kube-system` should be `Running`.
+
+### 8a. Verify nodes are talking to each other on the private network
+
+Aranya's preference is that inter-node traffic stays on the private VPC, not public IPs. The following checks prove that's what's actually happening at every layer (Kubernetes view, ICMP/L3, etcd Raft, apiserver, and the Cilium overlay).
+
+**(1) Kubernetes sees the nodes on private IPs.**
+
+```bash
+kubectl get nodes -o wide
+```
+
+Expect: the `INTERNAL-IP` column shows `10.120.0.x` (or whatever your private VPC range is) for every node, and `EXTERNAL-IP` is `<none>`. If `INTERNAL-IP` shows the public IP, kubelet bound to the wrong interface — likely a problem with `ip=` / `access_ip=` in `inventory.ini`.
+
+**(2) Every node can reach every other node on the private network (L3 mesh).**
+
+```bash
+for src in $NODE1_PUBLIC $NODE2_PUBLIC $NODE3_PUBLIC; do
+  echo "===== from $src ====="
+  ssh -i ~/.ssh/aranya_candidate_key root@$src "
+    for dst in $NODE1_PRIVATE $NODE2_PRIVATE $NODE3_PRIVATE; do
+      printf '  -> %s: ' \$dst
+      ping -c 2 -W 2 \$dst 2>/dev/null | awk -F'[ ,]' '/packets received/ {print \$4\" received of \"\$1}'
+    done"
+done
+```
+
+Expect: every source-destination pair reports `2 received of 2`. A node pinging its own private IP also passes — that's fine.
+
+**(3) etcd's 3-node Raft cluster is healthy and peering over private IPs.**
+
+```bash
+ssh -i ~/.ssh/aranya_candidate_key root@$NODE1_PUBLIC '
+  ETCDCTL_API=3 etcdctl \
+    --endpoints=https://'"$NODE1_PRIVATE"':2379,https://'"$NODE2_PRIVATE"':2379,https://'"$NODE3_PRIVATE"':2379 \
+    --cacert=/etc/ssl/etcd/ssl/ca.pem \
+    --cert=/etc/ssl/etcd/ssl/admin-node1.pem \
+    --key=/etc/ssl/etcd/ssl/admin-node1-key.pem \
+    endpoint status --cluster -w table
+'
+```
+
+Expect: 3 rows, exactly 1 `IS LEADER = true`, every `IS LEARNER` `false`, every `ERRORS` cell empty, and every `ENDPOINT` URL using a `10.120.0.x` address.
+
+**(4) Each apiserver advertises its private IP, and each kubelet talks to its local apiserver.**
+
+```bash
+for ip in $NODE1_PUBLIC $NODE2_PUBLIC $NODE3_PUBLIC; do
+  echo "===== $ip ====="
+  ssh -i ~/.ssh/aranya_candidate_key root@$ip '
+    echo -n "  apiserver --advertise-address: "
+    ps -ef | grep -oE "advertise-address=[0-9.]+" | head -1
+    echo -n "  kubelet server:                 "
+    grep -E "^\s*server:" /etc/kubernetes/kubelet.conf | head -1 | awk "{print \$NF}"
+  '
+done
+```
+
+Expect: every apiserver advertises a `10.120.0.x` address; every kubelet's `server:` is `https://127.0.0.1:6443` (each kubelet talks to its own local apiserver).
+
+**(5) Cilium pod-to-pod routing works across nodes (proves the CNI overlay rides the private network).**
+
+This one is best run *after* section 11 (hello-aranya), when there are actual pods on different nodes to test with. The check looks like:
+
+```bash
+# Pick two hello-aranya pods that landed on different nodes:
+kubectl -n hello-aranya get pods -o wide
+# -> note one pod's name on node1 and another pod's IP on node3 (or any 2 different nodes).
+
+POD_ON_NODE1=$(kubectl -n hello-aranya get pods -o jsonpath='{range .items[*]}{.metadata.name} {.spec.nodeName}{"\n"}{end}' | awk '$2=="node1"{print $1; exit}')
+POD_IP_ON_NODE3=$(kubectl -n hello-aranya get pods -o jsonpath='{range .items[*]}{.status.podIP} {.spec.nodeName}{"\n"}{end}' | awk '$2=="node3"{print $1; exit}')
+
+# Pod on node1 fetches the page served by a pod on node3, by pod-IP, through the Cilium overlay:
+kubectl -n hello-aranya exec $POD_ON_NODE1 -- wget -qO- --timeout=5 http://$POD_IP_ON_NODE3/ | grep -i "hello aranya"
+```
+
+Expect: the `hello aranya` HTML comes back. If the response hangs or `wget` returns with no output, Cilium's overlay isn't carrying traffic between the two nodes — `kubectl -n kube-system exec ds/cilium -- cilium-dbg status --brief` should report `OK`; if it reports anything else, that's where to start debugging.
+
+Note: if Kubernetes scheduled both replicas on the *same* node (unlikely with 2 replicas and 3 nodes, but possible under odd taint configurations), `kubectl -n hello-aranya delete pod --all` and try again — the scheduler will spread them.
 
 ---
 
@@ -373,15 +453,18 @@ EOF
 
 tar -C $WORKDIR -czf /tmp/aranya-secrets.tar.gz .
 
+# Resolve recipient primary-key fingerprints from `gpg --list-keys --keyid-format=long`.
+# Comments are for the original submission; substitute your own recipients on a re-run.
 gpg --trust-model always \
     --output ./aranya-secrets.tar.gz.gpg \
     --encrypt \
-    --recipient christian.ondaatje@pm.me \
-    --recipient ybquansah@gmail.com \
-    --recipient sasivarnan619@gmail.com \
+    --recipient B801738133F43C83 \
+    --recipient C834488140657B2C \
+    --recipient 1DE19070C024F229 \
     /tmp/aranya-secrets.tar.gz
 
-shred -u /tmp/aranya-secrets.tar.gz $WORKDIR/*  # clean up unencrypted copies
+# BSD `rm -P` overwrites before unlinking — macOS doesn't ship `shred`.
+rm -P /tmp/aranya-secrets.tar.gz $WORKDIR/*
 rmdir $WORKDIR
 ```
 
@@ -424,7 +507,7 @@ Sasi's email lists kube-vip as a suggestion that "helps with" the no-SPOF prefer
 
 Root cause: DigitalOcean's VPC is a software-defined routed network, not a true L2 broadcast domain. The DO SDN filters ARP for IPs that DO didn't assign. Same restriction affects kube-vip ARP on AWS and GCP without provider-specific integration.
 
-Pivot in this repo: `kube_vip_enabled: false` in `inventory/group_vars/k8s_cluster/addons.yml`, and `loadbalancer_apiserver_localhost: true` with `loadbalancer_apiserver_type: nginx` in `inventory/group_vars/all/all.yml`. Kubespray installs a small nginx on every node listening at `127.0.0.1:6443` and fanning to all 3 real apiservers. Every kubelet, kube-proxy, and controller talks to its local nginx, so any single apiserver can die without disrupting in-cluster operations. External `kubectl` from your Mac points at one node's public IP and would need a kubeconfig update if that specific node died — an admin-access SPOF, not a cluster-availability SPOF.
+Pivot in this repo: `kube_vip_enabled: false` in `inventory/group_vars/k8s_cluster/addons.yml`, and `loadbalancer_apiserver_localhost: true` with `loadbalancer_apiserver_type: nginx` in `inventory/group_vars/all/all.yml`. Because every node here is both control-plane and worker, kubespray doesn't actually install the fronting nginx-proxy static pod — that pod only goes on worker-only nodes. Each kubelet talks directly to its own local apiserver at `127.0.0.1:6443`, and HA is preserved by the 3-node stacked-etcd cluster (any single apiserver can die without disrupting in-cluster operations; etcd retains quorum with 2 of 3). External `kubectl` from your Mac points at one node's public IP and would need a kubeconfig update if that specific node died — an admin-access SPOF, not a cluster-availability SPOF. If a worker-only node were added later, the localhost-LB setting would automatically deploy nginx-proxy on it to fan across all 3 apiservers.
 
 A future version of this work could replace the localhost LB with kube-vip + DO Reserved IPs (kube-vip can move a real DO-assigned IP between droplets via the DO API), but that needs a DO API token we weren't given.
 

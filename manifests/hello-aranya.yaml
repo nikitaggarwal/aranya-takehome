@@ -27,7 +27,7 @@ data:
       <h1>hello aranya</h1>
       <p>Served by <code>nginx</code> on a 3-node Kubernetes cluster built with
          <a href="https://github.com/kubernetes-sigs/kubespray">kubespray</a>,
-         networked with Cilium, HA control plane via kube-vip,
+         networked with Cilium, HA control plane via 3 stacked-etcd apiservers,
          and cluster apps managed by ArgoCD + clusterdOS.</p>
     </body>
     </html>
