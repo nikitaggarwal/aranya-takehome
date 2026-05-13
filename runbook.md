@@ -1,6 +1,6 @@
 # Aranya take-home runbook
 
-This runbook walks you through reproducing the cluster from scratch on a fresh Mac with no Kubernetes tooling installed and 3 bare Ubuntu droplets in a DigitalOcean VPC. By the end you'll have:
+This runbook walks you through reproducing the cluster from scratch on a fresh local control machine (macOS or Linux) with no Kubernetes tooling installed, plus 3 bare Ubuntu droplets in a DigitalOcean VPC. Detailed install commands in §1 are written for macOS; an equivalent Linux path is documented alongside. By the end you'll have:
 
 - A 3-node Kubernetes 1.32 cluster (each node is control-plane + worker + etcd) installed by **kubespray**, with **Cilium** as the CNI.
 - HA control plane: 3 stacked-etcd apiservers, each kubelet talks to its own local apiserver on `127.0.0.1:6443`. Any single node can fail without taking the cluster down (etcd retains quorum with 2 of 3). `loadbalancer_apiserver_localhost: true` is set in the inventory but is an effective no-op while every node is both control-plane and worker — kubespray only installs the fronting nginx-proxy on worker-only nodes.
@@ -39,20 +39,40 @@ NODE3_PUBLIC=165.227.57.127   NODE3_PRIVATE=10.120.0.10
 
 ---
 
-## 1. Set up local tooling on the Mac
+## 1. Set up local tooling on your control machine
+
+Tools needed locally: `kubectl`, `gnupg`, `helm`, `jq`, `gh` (GitHub CLI), `python` ≥ 3.12. Ansible itself is installed into a Python venv later (§5) — no system-wide install required.
+
+### On macOS
 
 ```bash
-# Homebrew (Mac package manager). Skip if `brew --version` already works.
+# Homebrew. Skip if `brew --version` already works.
 curl -fsSL -o /tmp/brew.sh https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
 bash /tmp/brew.sh
 echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 eval "$(/opt/homebrew/bin/brew shellenv)"
 
-# CLI tools.
 brew install kubectl gnupg helm jq gh python@3.12
 ```
 
-Verify:
+### On Linux (Debian/Ubuntu)
+
+`gnupg`, `jq`, `python3.12`, and `helm`'s install script work directly from the distro; `kubectl` and `gh` ship from their official Kubernetes / GitHub apt repos. The official install pages are the most up-to-date source of truth — they handle key rotation and version pinning:
+
+- kubectl: <https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/>
+- gh: <https://github.com/cli/cli/blob/trunk/docs/install_linux.md>
+- helm: <https://helm.sh/docs/intro/install/>
+
+The rest:
+
+```bash
+sudo apt update
+sudo apt install -y gnupg jq python3.12 python3.12-venv
+```
+
+For RHEL/Fedora, the equivalent `dnf install` reaches the same end state.
+
+### Verify (both platforms)
 
 ```bash
 kubectl version --client
@@ -165,7 +185,7 @@ git clone --depth 1 --branch release-2.28 https://github.com/kubernetes-sigs/kub
 Create a Python venv and install kubespray's exact Ansible deps inside it:
 
 ```bash
-/opt/homebrew/opt/python@3.12/libexec/bin/python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r kubespray/requirements.txt
@@ -173,6 +193,8 @@ ansible --version | head -1   # should report ansible 9.13.0
 ```
 
 The venv keeps Ansible's Python deps isolated from the system Python. Both `kubespray/` and `venv/` are in `.gitignore` — they're rebuilt locally per this section, not vendored into the repo.
+
+If `python3.12` isn't on your PATH on macOS, use the absolute path to Homebrew's binary: `/opt/homebrew/opt/python@3.12/libexec/bin/python -m venv venv`.
 
 ---
 
@@ -186,7 +208,7 @@ node2 ansible_host=NODE2_PUBLIC  ip=NODE2_PRIVATE  access_ip=NODE2_PRIVATE  etcd
 node3 ansible_host=NODE3_PUBLIC  ip=NODE3_PRIVATE  access_ip=NODE3_PRIVATE  etcd_member_name=etcd3
 ```
 
-- `ansible_host` is the address Ansible SSHes to from your Mac — public, because the Mac is off-VPC.
+- `ansible_host` is the address Ansible SSHes to from your local machine — public, because that machine is off-VPC.
 - `ip` and `access_ip` are the addresses K8s components on the nodes use to find each other — private, per the Aranya inter-node-on-private preference.
 
 The `[all:vars]` block at the top of `inventory.ini` references `ansible_ssh_private_key_file=~/.ssh/aranya_candidate_key` — that matches the path you saved the key to in section 2. If you saved it somewhere else, update that line.
@@ -197,7 +219,7 @@ If the public IPs differ from the originals, also update the cert SAN list in `i
 supplementary_addresses_in_ssl_keys: [NODE1_PUBLIC, NODE2_PUBLIC, NODE3_PUBLIC]
 ```
 
-Without those SANs, `kubectl` from your Mac (which hits the public IP) gets a TLS error because the apiserver's cert doesn't list the IP you're connecting to.
+Without those SANs, `kubectl` from your local machine (which hits the public IP) gets a TLS error because the apiserver's cert doesn't list the IP you're connecting to.
 
 Sanity check that Ansible can reach all three nodes via this inventory:
 
@@ -225,7 +247,7 @@ When it finishes, the play recap should report `failed=0` for every node. If you
 
 ## 8. Fetch the admin kubeconfig and verify the cluster
 
-Kubespray writes the admin kubeconfig to `/etc/kubernetes/admin.conf` on every control-plane node. Copy it to your Mac and rewrite the server URL to point at a node we can reach:
+Kubespray writes the admin kubeconfig to `/etc/kubernetes/admin.conf` on every control-plane node. Copy it to your local machine and rewrite the server URL to point at a node we can reach:
 
 ```bash
 mkdir -p ~/.kube
@@ -342,7 +364,7 @@ kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d ; echo
 ```
 
-To open the UI from your Mac (port-forward — the simplest path; we don't expose ArgoCD publicly):
+To open the UI from your local machine (port-forward — the simplest path; we don't expose ArgoCD publicly):
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8443:443
@@ -463,8 +485,13 @@ gpg --trust-model always \
     --recipient 1DE19070C024F229 \
     /tmp/aranya-secrets.tar.gz
 
-# BSD `rm -P` overwrites before unlinking — macOS doesn't ship `shred`.
-rm -P /tmp/aranya-secrets.tar.gz $WORKDIR/*
+# Secure-delete the unencrypted copies. macOS has BSD `rm -P` (overwrite then unlink);
+# Linux has `shred -u` (coreutils, ships by default). Use whichever is available.
+if command -v shred >/dev/null 2>&1; then
+  shred -u /tmp/aranya-secrets.tar.gz $WORKDIR/*
+else
+  rm -P /tmp/aranya-secrets.tar.gz $WORKDIR/*
+fi
 rmdir $WORKDIR
 ```
 
@@ -507,7 +534,7 @@ Sasi's email lists kube-vip as a suggestion that "helps with" the no-SPOF prefer
 
 Root cause: DigitalOcean's VPC is a software-defined routed network, not a true L2 broadcast domain. The DO SDN filters ARP for IPs that DO didn't assign. Same restriction affects kube-vip ARP on AWS and GCP without provider-specific integration.
 
-Pivot in this repo: `kube_vip_enabled: false` in `inventory/group_vars/k8s_cluster/addons.yml`, and `loadbalancer_apiserver_localhost: true` with `loadbalancer_apiserver_type: nginx` in `inventory/group_vars/all/all.yml`. Because every node here is both control-plane and worker, kubespray doesn't actually install the fronting nginx-proxy static pod — that pod only goes on worker-only nodes. Each kubelet talks directly to its own local apiserver at `127.0.0.1:6443`, and HA is preserved by the 3-node stacked-etcd cluster (any single apiserver can die without disrupting in-cluster operations; etcd retains quorum with 2 of 3). External `kubectl` from your Mac points at one node's public IP and would need a kubeconfig update if that specific node died — an admin-access SPOF, not a cluster-availability SPOF. If a worker-only node were added later, the localhost-LB setting would automatically deploy nginx-proxy on it to fan across all 3 apiservers.
+Pivot in this repo: `kube_vip_enabled: false` in `inventory/group_vars/k8s_cluster/addons.yml`, and `loadbalancer_apiserver_localhost: true` with `loadbalancer_apiserver_type: nginx` in `inventory/group_vars/all/all.yml`. Because every node here is both control-plane and worker, kubespray doesn't actually install the fronting nginx-proxy static pod — that pod only goes on worker-only nodes. Each kubelet talks directly to its own local apiserver at `127.0.0.1:6443`, and HA is preserved by the 3-node stacked-etcd cluster (any single apiserver can die without disrupting in-cluster operations; etcd retains quorum with 2 of 3). External `kubectl` from your local machine points at one node's public IP and would need a kubeconfig update if that specific node died — an admin-access SPOF, not a cluster-availability SPOF. If a worker-only node were added later, the localhost-LB setting would automatically deploy nginx-proxy on it to fan across all 3 apiservers.
 
 A future version of this work could replace the localhost LB with kube-vip + DO Reserved IPs (kube-vip can move a real DO-assigned IP between droplets via the DO API), but that needs a DO API token we weren't given.
 

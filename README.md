@@ -4,7 +4,7 @@
 
 ## Reproduce from scratch
 
-[`runbook.md`](./runbook.md) is the source of truth — 13 numbered sections that take a fresh Mac plus 3 bare Ubuntu droplets to a fully running cluster (HA control plane, Cilium CNI, ArgoCD, clusterdOS, public `hello aranya` page). Section 8a documents the inter-node networking checks; the troubleshooting notes at the bottom explain the non-obvious snags (kube-vip ARP on DO's VPC, Cilium init-container ownership on Ubuntu 24.04, clusterdOS chart overrides).
+[`runbook.md`](./runbook.md) is the source of truth — 13 numbered sections that take a fresh local control machine (macOS or Linux) plus 3 bare Ubuntu droplets to a fully running cluster (HA control plane, Cilium CNI, ArgoCD, clusterdOS, public `hello aranya` page). Section 8a documents the inter-node networking checks; the troubleshooting notes at the bottom explain the non-obvious snags (kube-vip ARP on DO's VPC, Cilium init-container ownership on Ubuntu 24.04, clusterdOS chart overrides).
 
 ## Live deliverables
 
