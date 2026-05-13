@@ -10,6 +10,10 @@ kubeconfig.yaml
 admin.conf
 *.kubeconfig
 
+# Kubespray writes various secrets (kubeadm cert keys, etc.) into <inventory>/credentials/
+inventory/credentials/
+*.creds
+
 # Python virtual env (kubespray deps live here)
 venv/
 .venv/

@@ -17,9 +17,13 @@ bin_dir: /usr/local/bin
 #   port: 1234
 
 ## Internal loadbalancers for apiservers
-# loadbalancer_apiserver_localhost: true
+## Pivot from kube-vip — see inventory/group_vars/k8s_cluster/addons.yml for context.
+## Installs a small nginx LB on every node listening at 127.0.0.1:6443 and
+## upstream-fanning to all 3 control-plane apiservers. HA from every kubelet's,
+## kube-proxy's, and kube-controller's perspective.
+loadbalancer_apiserver_localhost: true
 # valid options are "nginx" or "haproxy"
-# loadbalancer_apiserver_type: nginx  # valid values "nginx" or "haproxy"
+loadbalancer_apiserver_type: nginx  # valid values "nginx" or "haproxy"
 
 ## Local loadbalancer should use this port
 ## And must be set port 6443

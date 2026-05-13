@@ -284,7 +284,9 @@ default_kubelet_config_dir: "{{ kube_config_dir }}/dynamic_kubelet_dir"
 
 ## Supplementary addresses that can be added in kubernetes ssl keys.
 ## That can be useful for example to setup a keepalived virtual IP
-supplementary_addresses_in_ssl_keys: [138.68.244.183, 167.172.197.138, 165.227.57.127, 10.120.0.100]
+# Public IPs added so kubectl from off-VPC (e.g. laptop) presents a valid TLS cert.
+# 10.120.0.100 was here when kube-vip was enabled; removed after pivot to localhost LB.
+supplementary_addresses_in_ssl_keys: [138.68.244.183, 167.172.197.138, 165.227.57.127]
 
 ## Running on top of openstack vms with cinder enabled may lead to unschedulable pods due to NoVolumeZoneConflict restriction in kube-scheduler.
 ## See https://github.com/kubernetes-sigs/kubespray/issues/2141
