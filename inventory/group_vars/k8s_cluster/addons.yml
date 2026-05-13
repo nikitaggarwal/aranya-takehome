@@ -222,32 +222,9 @@ argocd_enabled: false
 
 # The plugin manager for kubectl
 
-# Kube VIP — DISABLED on DigitalOcean.
-#
-# Earlier attempt: we enabled kube-vip in ARP mode (kube_vip_address=10.120.0.100,
-# kube_vip_interface=eth1) so the control-plane VIP would float between the
-# 3 control-plane nodes. The leader claims the VIP on its eth1 interface, then
-# sends a gratuitous ARP announcement so every other node updates its ARP cache
-# and routes traffic for the VIP to whichever node is currently leader.
-#
-# Result on DigitalOcean: node1 successfully claimed 10.120.0.100 on its own
-# eth1 interface, but the gratuitous ARP packets never reached node2 or node3.
-# `ping 10.120.0.100` from a non-leader node returned "Destination Host
-# Unreachable", and `ip neigh show` reported `10.120.0.100 dev eth1 FAILED`.
-# Meanwhile direct pings to node1's eth1 IP (10.120.0.8) worked fine.
-#
-# Root cause: DigitalOcean's VPC is a software-defined routed network, not a
-# true L2 broadcast domain. The DO SDN filters ARP traffic for IPs that DO
-# itself didn't assign to a droplet. kube-vip can claim any local IP on its
-# host interface, but other droplets in the VPC never see the announcement.
-# This is the same limitation that breaks kube-vip on AWS/GCP without
-# provider-specific integration (e.g. DO Reserved IPs + DO API token).
-#
-# Pivot: replaced with kubespray's `loadbalancer_apiserver_localhost` mode
-# (see inventory/group_vars/all/all.yml), which installs a small nginx on
-# every node listening on 127.0.0.1:6443 and load-balancing across all 3
-# real control-plane apiservers. Provides HA from every in-cluster process's
-# perspective; external kubectl still points at one specific node's public IP.
+# Kube VIP — DISABLED. Pivoted to kubespray's loadbalancer_apiserver_localhost
+# (see inventory/group_vars/all/all.yml). See commit history for the full
+# story: kube-vip ARP mode does not work on DigitalOcean's VPC.
 kube_vip_enabled: false
 # kube_vip_arp_enabled: true
 # kube_vip_controlplane_enabled: true
