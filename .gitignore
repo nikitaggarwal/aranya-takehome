@@ -10,6 +10,11 @@ kubeconfig.yaml
 admin.conf
 *.kubeconfig
 
+# Encrypted credentials bundle — delivered as email attachment, not via the repo.
+# Even though it's encrypted, no reason to publish it.
+*.gpg
+*.tar.gz.gpg
+
 # Kubespray writes various secrets (kubeadm cert keys, etc.) into <inventory>/credentials/
 inventory/credentials/
 *.creds
