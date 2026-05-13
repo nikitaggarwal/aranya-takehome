@@ -47,6 +47,16 @@ spec:
         gitapps:
           certmanager:
             enabled: true
+            # Override the chart's default `featureGates: ExperimentalGatewayAPISupport=true`.
+            # That gate requires Gateway API CRDs to be installed first; we haven't
+            # installed them (nothing in our deliverables needs Gateway API), and
+            # without them cert-manager-controller crashloops on startup with:
+            #   "the Gateway API CRDs do not seem to be present, but
+            #    ExperimentalGatewayAPISupport is set to true"
+            values:
+              featureGates: ""
+              config:
+                enableGatewayAPI: false
           crossplane:
             enabled: false
           ksm:
@@ -55,6 +65,15 @@ spec:
             enabled: false
           metricsserver:
             enabled: true
+            # Append --kubelet-insecure-tls to the chart's defaultArgs.
+            # Kubespray-generated kubelet TLS certs list hostnames in their SAN
+            # but not the kubelet's eth1 IP. Without this flag, metrics-server
+            # tries to scrape `https://10.120.0.X:10250/` and fails TLS
+            # verification: "cannot validate certificate for 10.120.0.X
+            # because it doesn't contain any IP SANs".
+            values:
+              args:
+                - --kubelet-insecure-tls
           nfd:
             enabled: true
           nvidiagpuoperator:
