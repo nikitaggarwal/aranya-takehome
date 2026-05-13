@@ -1,0 +1,26 @@
+# Secrets — never commit
+*.pem
+*.key
+id_rsa
+id_ed25519
+**/private_key*
+**/secret*
+kubeconfig
+kubeconfig.yaml
+admin.conf
+*.kubeconfig
+
+# Python virtual env (kubespray deps live here)
+venv/
+.venv/
+
+# Kubespray clone — pulled fresh per the runbook, not vendored
+kubespray/
+
+# macOS noise
+.DS_Store
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
