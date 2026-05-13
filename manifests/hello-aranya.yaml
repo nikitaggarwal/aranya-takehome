@@ -1,0 +1,93 @@
+---
+# Namespace for the demo workload — isolates it from system namespaces.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello-aranya
+---
+# Custom index.html mounted into nginx as a ConfigMap. Beats baking a custom image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-aranya-html
+  namespace: hello-aranya
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>hello aranya</title>
+      <style>
+        body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
+        code { background: #f5f5f5; padding: 0.1em 0.3em; border-radius: 0.2em; }
+      </style>
+    </head>
+    <body>
+      <h1>hello aranya</h1>
+      <p>Served by <code>nginx</code> on a 3-node Kubernetes cluster built with
+         <a href="https://github.com/kubernetes-sigs/kubespray">kubespray</a>,
+         networked with Cilium, HA control plane via kube-vip,
+         and cluster apps managed by ArgoCD + clusterdOS.</p>
+    </body>
+    </html>
+---
+# 2 replicas so we survive single-pod failure and demonstrate the Deployment pattern.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-aranya
+  namespace: hello-aranya
+  labels:
+    app: hello-aranya
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-aranya
+  template:
+    metadata:
+      labels:
+        app: hello-aranya
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: html
+          configMap:
+            name: hello-aranya-html
+---
+# NodePort exposes the Service on port 30080 of every node, reachable from the public internet
+# via any of the three node public IPs:
+#   http://138.68.244.183:30080
+#   http://167.172.197.138:30080
+#   http://165.227.57.127:30080
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-aranya
+  namespace: hello-aranya
+spec:
+  type: NodePort
+  selector:
+    app: hello-aranya
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
